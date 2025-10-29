@@ -1,4 +1,3 @@
-
 import discord
 from discord.ext import commands, tasks
 import sqlite3
@@ -11,6 +10,7 @@ from dateutil.relativedelta import relativedelta
 # ====================================================================
 # 1. CONFIGURATION ET INITIALISATION
 # ====================================================================
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE" 
 FRENCH_TZ = ZoneInfo("Europe/Paris") 
 intents = discord.Intents.default()
 intents.members = True          
@@ -39,6 +39,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER, user_id INTEGER,
         user_name TEXT, status TEXT, UNIQUE(message_id, user_id)
     )''')
+    # --- Migrations ---
     try: cursor.execute("SELECT recurrence_type FROM events LIMIT 1")
     except sqlite3.OperationalError:
         print("Migration BDD : Ajout de la colonne 'recurrence_type'")
@@ -185,26 +186,20 @@ async def create_event_post(date: str, time: str, details: str, recurrence_type:
     thread_name = f"💬 Discussion entraînement du {date}"
     thread = await message.create_thread(name=thread_name, auto_archive_duration=1440) 
     await thread.send(f"Utilisez ce fil pour discuter des détails de l'entraînement du {date}.")
-# 4. Envoi du rappel immédiat (CORRIGÉ pour les mentions)
+    
+    # Rappel immédiat avec mentions corrigées
     if target_group:
-        guild = channel.guild # Récupère le serveur
-        role_mentions = [] # Liste pour stocker les mentions valides
-        
-        # Sépare les noms si l'utilisateur en a mis plusieurs (ex: "@RoleA @RoleB")
+        guild = channel.guild 
+        role_mentions = [] 
         potential_role_names = target_group.split() 
-        
         for name in potential_role_names:
             role = discord.utils.find(lambda r: r.mention == name or r.name == name.lstrip('@'), guild.roles)
-            if role:
-                role_mentions.append(role.mention) # Ajoute la mention cliquable
-            else:
-                # Si le rôle n'est pas trouvé, on ajoute le texte tel quel (au cas où)
-                role_mentions.append(name) 
-                print(f"Attention : Le rôle '{name}' fourni pour l'événement {message_id} n'a pas été trouvé sur le serveur.")
-
+            if role: role_mentions.append(role.mention)
+            else: role_mentions.append(name); print(f"Attention : Rôle '{name}' non trouvé.")
         if role_mentions:
             mention_string = " ".join(role_mentions)
             await channel.send(f"Nouvel entraînement publié ! {mention_string} veuillez répondre. ({date} @ {time} Heure de Paris)")
+
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     is_recurrent_int = 1 if recurrence_type != 'none' else 0
@@ -231,16 +226,16 @@ async def on_ready():
 # --- COMMANDE SLASH (RAPIDE) ---
 @bot.tree.command(name="creer_entrainement", description="Créer un nouvel entraînement (Heure de Paris)")
 @discord.app_commands.describe(
-    date="Date de l'entraînement (ex: AAAA-MM-JJ)", time="Heure (ex: 19:00:00)",
-    details="Détails supplémentaires", recurrent="[Obsolète] True=Hebdo (préférer /creer_wizard)",
-    target_group="Le(s) rôle(s) à notifier", garder_le_fil="True=NE PAS supprimer le fil"
+    date="Date (AAAA-MM-JJ)", time="Heure (HH:MM:SS)", details="Détails", 
+    recurrent="[Obsolète] True=Hebdo", target_group="Rôle(s) à notifier", 
+    garder_le_fil="True=NE PAS supprimer le fil"
 )
 async def create_training(interaction: discord.Interaction, date: str, time: str, details: str, recurrent: bool = False, target_group: str = None, garder_le_fil: bool = False):
-    await interaction.response.send_message(f"Création de l'entraînement pour le {date}...", ephemeral=True)
+    await interaction.response.send_message(f"Création de l'entraînement...", ephemeral=True)
     channel = interaction.channel
     recurrence_str = 'weekly' if recurrent else 'none'
     await create_event_post(date, time, details, recurrence_str, target_group, channel, garder_le_fil)
-    await interaction.edit_original_response(content="Entraînement publié avec succès !")
+    await interaction.edit_original_response(content="Entraînement publié !")
 
 # --- DÉBUT DE L'ASSISTANT (WIZARD) ---
 async def ask_text(user: discord.User, question: str, timeout: int = 300) -> str:
@@ -252,8 +247,7 @@ async def ask_text(user: discord.User, question: str, timeout: int = 300) -> str
         if message.content.lower().strip() in ['aucun', 'non', 'none', '']: return None
         return message.content
     except asyncio.TimeoutError:
-        await dm.send("Délai expiré. Veuillez relancer la commande.")
-        return None
+        await dm.send("Délai expiré. Relancez la commande."); return None
 async def ask_choice(user: discord.User, question: str, choices: list[str], timeout: int = 300) -> str:
     dm = await user.create_dm()
     view = discord.ui.View(timeout=timeout)
@@ -261,40 +255,39 @@ async def ask_choice(user: discord.User, question: str, choices: list[str], time
     for choice in choices:
         button = discord.ui.Button(label=choice, style=discord.ButtonStyle.primary)
         async def callback(interaction: discord.Interaction, button_label: str):
-            await interaction.response.edit_message(content=f"Vous avez sélectionné·e : **{button_label}**", view=None)
+            await interaction.response.edit_message(content=f"Sélectionné·e : **{button_label}**", view=None)
             result.set_result(button_label)
         button.callback = lambda i, b=choice: callback(i, b)
         view.add_item(button)
     await dm.send(question, view=view)
     try: return await result
     except asyncio.TimeoutError:
-        await dm.send("Délai expiré. Veuillez relancer la commande.")
-        return None
+        await dm.send("Délai expiré. Relancez la commande."); return None
 
 @bot.tree.command(name="creer_wizard", description="[ADMIN] Lancer l'assistant de création d'événement en MP.")
 @discord.app_commands.checks.has_permissions(administrator=True)
 async def creer_wizard(interaction: discord.Interaction):
     user = interaction.user
     original_channel = interaction.channel 
-    await interaction.response.send_message(f"Parfait ! Je vous ai envoyé un message privé pour commencer.", ephemeral=True)
+    await interaction.response.send_message(f"Parfait ! Message privé envoyé.", ephemeral=True)
     try:
-        date_str = await ask_text(user, "📅 **Étape 1/6 :** Quelle est la date de l'événement ? (Format : AAAA-MM-JJ)")
+        date_str = await ask_text(user, "📅 **Étape 1/6 :** Date ? (AAAA-MM-JJ)")
         if not date_str: return
-        time_str = await ask_text(user, "🕒 **Étape 2/6 :** Quelle est l'heure de début ? (Format : HH:MM:SS)")
+        time_str = await ask_text(user, "🕒 **Étape 2/6 :** Heure de début ? (HH:MM:SS)")
         if not time_str: return
-        details_str = await ask_text(user, "📝 **Étape 3/6 :** Quels sont les détails (lieu, etc.) ?")
+        details_str = await ask_text(user, "📝 **Étape 3/6 :** Détails (lieu, etc.) ?")
         if not details_str: return
-        recurrence_choice = await ask_choice(user, "🔁 **Étape 4/6 :** Quelle est la récurrence ?", ["Aucune", "Hebdomadaire", "Mensuelle"])
+        recurrence_choice = await ask_choice(user, "🔁 **Étape 4/6 :** Récurrence ?", ["Aucune", "Hebdomadaire", "Mensuelle"])
         if not recurrence_choice: return
         recurrence_map = {"Aucune": "none", "Hebdomadaire": "weekly", "Mensuelle": "monthly"}
         recurrence_type = recurrence_map.get(recurrence_choice, "none")
-        keep_choice = await ask_choice(user, "🧵 **Étape 5/6 :** Faut-il garder le fil de discussion après l'événement ?", ["Non (supprimer)", "Oui (archiver)"])
+        keep_choice = await ask_choice(user, "🧵 **Étape 5/6 :** Garder le fil après l'événement ?", ["Non (supprimer)", "Oui (archiver)"])
         if not keep_choice: return
         garder_le_fil = (keep_choice == "Oui (archiver)")
-        target_group_str = await ask_text(user, "🔔 **Étape 6/6 (Optionnel) :** Quel(s) rôle(s) mentionner pour les rappels ? (ex: `@Membres` ou `@EquipeA @EquipeB`). Laissez vide ou répondez 'aucun' si personne.")
+        target_group_str = await ask_text(user, "🔔 **Étape 6/6 (Optionnel) :** Rôle(s) à mentionner ? (ex: `@RoleA @RoleB`). 'aucun' si personne.")
         
-        confirmation_msg = f"✅ **Terminé !** L'événement va être créé dans le salon {original_channel.mention}."
-        if target_group_str: confirmation_msg += f" Les rappels mentionneront {target_group_str}."
+        confirmation_msg = f"✅ **Terminé !** Création dans {original_channel.mention}."
+        if target_group_str: confirmation_msg += f" Rappels pour {target_group_str}."
         await user.send(confirmation_msg)
         await create_event_post(
             date=date_str, time=time_str, details=details_str,
@@ -303,7 +296,7 @@ async def creer_wizard(interaction: discord.Interaction):
         )
     except Exception as e:
         print(f"Erreur durant l'assistant : {e}")
-        await user.send(f"Une erreur est survenue lors de la création. Détails : {e}")
+        await user.send(f"Erreur lors de la création. Détails : {e}")
 
 # --- COMMANDE DE SUPPRESSION ---
 @bot.tree.command(name="supprimer_evenement", description="[ADMIN] Supprime manuellement un événement.")
@@ -348,13 +341,12 @@ async def on_tree_error(interaction: discord.Interaction, error: discord.app_com
         except discord.InteractionResponded: await interaction.followup.send(error_msg, ephemeral=True)
 
 # ====================================================================
-# 6. TÂCHES PLANIFIÉES (NETTOYAGE & RAPPELS) -- VERSION TEST RAPIDE
+# 6. TÂCHES PLANIFIÉES (NETTOYAGE & RAPPELS) -- VERSION PRODUCTION
 # ====================================================================
 
-# MODIFIÉ : Boucle toutes les 30 secondes
-@tasks.loop(seconds=30)
+@tasks.loop(hours=1)
 async def check_for_cleanup():
-    print(f"{datetime.datetime.now()}: Tâche de nettoyage (TEST-RAPIDE) : Vérification...")
+    print(f"{datetime.datetime.now()}: Tâche de nettoyage : Vérification...")
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT message_id, thread_id, event_date, event_time, details, target_group, channel_id, keep_thread, recurrence_type FROM events")
@@ -369,22 +361,20 @@ async def check_for_cleanup():
             naive_dt = datetime.datetime.fromisoformat(f"{date}T{time}")
             event_start_local = naive_dt.replace(tzinfo=FRENCH_TZ) 
             event_start_utc = event_start_local.astimezone(datetime.timezone.utc)
-            
-            # MODIFIÉ : Nettoyage 2 minutes après le début
-            cleanup_time_utc = event_start_utc + datetime.timedelta(minutes=2) 
+            cleanup_time_utc = event_start_utc + datetime.timedelta(hours=24) 
             
             if now_utc > cleanup_time_utc:
-                print(f"Tâche de nettoyage (TEST-RAPIDE) : L'événement {message_id} est terminé. Nettoyage...")
+                print(f"Nettoyage : Événement {message_id} terminé. Nettoyage...")
                 next_local_dt = None
                 
-                # --- 1. Gestion de la Récurrence ---
+                # --- Récurrence ---
                 if recurrence_type == 'weekly': next_local_dt = event_start_local + datetime.timedelta(weeks=1)
                 elif recurrence_type == 'monthly': next_local_dt = event_start_local + relativedelta(months=1)
                 
                 if next_local_dt:
                     now_local = datetime.datetime.now(FRENCH_TZ)
                     if next_local_dt < now_local:
-                        print(f"Nettoyage : Prochaine occurrence ({next_local_dt.strftime('%Y-%m-%d')}) passée. Récurrence annulée.")
+                        print(f"Nettoyage : Prochaine occurrence passée. Récurrence annulée.")
                     else:
                         next_date_str = next_local_dt.strftime("%Y-%m-%d")
                         next_time_str = next_local_dt.strftime("%H:%M:%S")
@@ -396,7 +386,7 @@ async def check_for_cleanup():
                         print(f"Nettoyage : Création prochain événement récurrent ({recurrence_type})...")
                         await create_event_post(next_date_str, next_time_str, details, recurrence_type, target_group, channel, bool(keep_thread))
 
-                # --- 2. Rapport final des présences ---
+                # --- Rapport Final ---
                 summary = get_attendance_summary(message_id)
                 summary_embed = discord.Embed(title=f"✅ Rapport final {date}", description="Événement terminé.", color=discord.Color.dark_grey())
                 coming_list = "\n".join([f"• {name}" for name, user_id in summary["coming"]]) or "Personne"
@@ -406,7 +396,7 @@ async def check_for_cleanup():
                 summary_embed.add_field(name="❓ Indécis·e·s", value=maybe_list, inline=False)
                 summary_embed.add_field(name="❌ Absent·e·s", value=not_coming_list, inline=False)
 
-                # --- 3. Nettoyage (conditionnel) ---
+                # --- Nettoyage ---
                 if keep_thread:
                     try:
                         thread = bot.get_channel(thread_id) or await bot.fetch_channel(thread_id)
@@ -427,7 +417,7 @@ async def check_for_cleanup():
                         await message.delete() 
                     except Exception: pass
 
-                # --- 4. Suppression de l'événement de la BDD ---
+                # --- Suppression BDD ---
                 cursor.execute("DELETE FROM events WHERE message_id = ?", (message_id,))
                 conn.commit()
                 print(f"Nettoyage : Événement {message_id} retiré BDD.")
@@ -435,10 +425,9 @@ async def check_for_cleanup():
             print(f"Erreur MAJEURE boucle nettoyage (event {message_id}): {e}") 
     conn.close()
 
-# MODIFIÉ : Boucle toutes les 30 secondes
-@tasks.loop(seconds=30) 
+@tasks.loop(hours=1) 
 async def check_reminders():
-    print(f"{datetime.datetime.now()}: Tâche de rappel (TEST-RAPIDE) : Vérification...")
+    print(f"{datetime.datetime.now()}: Tâche de rappel : Vérification...")
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT message_id, thread_id, event_date, event_time, target_group, channel_id, reminder_3d_sent, reminder_24h_sent FROM events")
@@ -455,39 +444,40 @@ async def check_reminders():
             event_start_local = naive_dt.replace(tzinfo=FRENCH_TZ)
             event_start_utc = event_start_local.astimezone(datetime.timezone.utc)
             
-            # --- 1. Logique J-3 (Ignorée en test rapide) ---
-            
-            # --- 2. Logique H-24 (MODIFIÉE pour H-2min TEST et TEMPS RESTANT) ---
+            # --- Rappel J-3 ---
+            event_local_date = event_start_local.date()
+            three_days_away = now_local_date + datetime.timedelta(days=3)
+            if not reminder_3d_sent and event_local_date == three_days_away and target_group:
+                print(f"Rappel : Envoi J-3 pour {message_id}...")
+                day_of_week = calendar.day_name[event_local_date.weekday()]
+                jours_fr = {"Monday": "lundi", "Tuesday": "mardi", "Wednesday": "mercredi", "Thursday": "jeudi", "Friday": "vendredi", "Saturday": "samedi", "Sunday": "dimanche"}
+                jour_fr = jours_fr.get(day_of_week, day_of_week)
+                reminder_message = (f"🔔 **Rappel !** Entraînement ce **{jour_fr}** ! {target_group} - confirmez votre présence. (Heure : {event_time_str} Paris)")
+                await channel.send(reminder_message)
+                cursor.execute("UPDATE events SET reminder_3d_sent = 1 WHERE message_id = ?", (message_id,))
+                conn.commit()
+
+            # --- Rappel H-24 ---
             time_until_event = event_start_utc - now_utc
             total_seconds = time_until_event.total_seconds()
-
-            # MODIFIÉ : Se déclenche entre 30 et 120 secondes AVANT (fenêtre plus large)
-            if not reminder_24h_sent and (30 < total_seconds <= 120): 
-                print(f"Tâche de rappel (TEST-RAPIDE) : Envoi du rappel H-2min pour {message_id}...")
+            if not reminder_24h_sent and (23 * 3600 < total_seconds <= 24 * 3600):
+                print(f"Rappel : Envoi H-24 pour {message_id}...")
                 thread = bot.get_channel(thread_id) or await bot.fetch_channel(thread_id)
                 if not thread: continue
                 
-                # NOUVEAU : Calcul du temps restant
-                minutes_remaining = int(total_seconds // 60)
-                seconds_remaining = int(total_seconds % 60)
-                temps_restant_str = f"{minutes_remaining} minute(s)" # Simplifié pour le test
+                # Calcul temps restant (plus précis pour H-24)
+                hours_remaining = int(total_seconds // 3600)
+                minutes_remaining = int((total_seconds % 3600) // 60)
+                temps_restant_str = f"{hours_remaining}h{minutes_remaining:02d}"
                 
-                # NOUVEAU : Embed dynamique
-                embed = discord.Embed(
-                    title="🔔 Rappel imminent !", 
-                    description=f"L'entraînement commence dans environ **{temps_restant_str}** !", 
-                    color=discord.Color.blue()
-                )
+                embed = discord.Embed(title="🔔 Rappel : J-1", description=f"L'entraînement commence dans environ **{temps_restant_str}** !", color=discord.Color.blue())
                 await thread.send(embed=embed)
                 
-                # Le reste (mentions) est inchangé
                 summary = get_attendance_summary(message_id)
                 all_users_to_ping = summary['coming'] + summary['maybe']
                 if all_users_to_ping:
                     mention_string = " ".join([f"<@{user_id}>" for name, user_id in all_users_to_ping])
                     await thread.send(f"Rappel pour les participant·e·s et indécis·e·s : {mention_string}")
-                
-                # Marque comme envoyé
                 cursor.execute("UPDATE events SET reminder_24h_sent = 1 WHERE message_id = ?", (message_id,))
                 conn.commit()
         except Exception as e:
