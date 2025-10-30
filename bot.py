@@ -126,7 +126,17 @@ class TrainingView(discord.ui.View):
         new_embed.add_field(name=f"❌ Absent·e·s ({len(summary['not_coming'])})", value=not_coming_list, inline=True)
         await interaction.message.edit(embed=new_embed, view=self)
     async def invite_and_update(self, interaction: discord.Interaction, status: str, response_text: str):
+        """Logique commune aux clics : acquitte, enregistre, gère le thread, et met à jour."""
+        
+        # --- CORRECTION : Acquittement immédiat ---
+        # On dit à Discord "J'ai reçu, je travaille" AVANT de faire les tâches lentes.
+        # ephemeral=True garantit que la réponse finale (followup) sera privée.
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        # 1. Enregistrement BDD (rapide)
         log_attendance(interaction.message.id, interaction.user.id, interaction.user.display_name, status)
+        
+        # 2. Gestion de l'accès au Thread (peut être lent)
         try:
             thread = interaction.message.thread
             if thread:
@@ -136,10 +146,21 @@ class TrainingView(discord.ui.View):
                 elif status == "Not Coming":
                     await thread.remove_user(interaction.user)
                     response_text += "\n👋 **Vous avez été retiré·e du fil de discussion.**"
-        except discord.Forbidden: pass
-        except Exception as e: print(f"Erreur gestion accès thread : {e}")
-        await interaction.response.send_message(response_text, ephemeral=True)
-        await self.update_message(interaction)
+        except discord.Forbidden:
+            print(f"Erreur : Le bot n'a pas la permission de gérer les utilisateurs dans le thread {thread.id}")
+            response_text += "\n⚠️ Le bot n'a pas les permissions pour gérer l'accès au thread."
+        except Exception as e:
+            print(f"Erreur lors de la gestion de l'accès au thread : {e}")
+
+        # 3. Envoi de la réponse (MODIFIÉ : followup.send)
+        # Puisqu'on a utilisé 'defer', on doit utiliser 'followup' pour envoyer la réponse.
+        await interaction.followup.send(response_text, ephemeral=True)
+        
+        # 4. Mise à jour du message principal (inchangé)
+        try:
+            await self.update_message(interaction)
+        except Exception as e:
+            print(f"Erreur lors de l'update_message : {e}")
     @discord.ui.button(label="✅ Je viens", style=discord.ButtonStyle.green, custom_id="coming")
     async def coming_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         event_end_utc = get_event_end_time_utc(interaction.message.id)
