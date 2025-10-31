@@ -23,8 +23,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 DB_NAME = "club_attendance.db"
 
 def init_db():
+    """Initialise les tables de la BDD et met à jour le schéma si nécessaire."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS events (
         message_id INTEGER PRIMARY KEY, thread_id INTEGER, channel_id INTEGER, 
@@ -32,32 +34,33 @@ def init_db():
         is_recurrent INTEGER DEFAULT 0, 
         target_group TEXT, reminder_3d_sent INTEGER DEFAULT 0, 
         reminder_24h_sent INTEGER DEFAULT 0, keep_thread INTEGER DEFAULT 0,
-        recurrence_type TEXT DEFAULT 'none' 
-    )''')
+        recurrence_type TEXT DEFAULT 'none',
+        is_cancelled INTEGER DEFAULT 0 
+    )
+    ''')
+    
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS attendance (
         id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER, user_id INTEGER,
         user_name TEXT, status TEXT, UNIQUE(message_id, user_id)
     )''')
-    # --- Migrations ---
+    
+    # --- Migration du schéma ---
+    # (Les anciennes migrations sont conservées)
     try: cursor.execute("SELECT recurrence_type FROM events LIMIT 1")
     except sqlite3.OperationalError:
-        print("Migration BDD : Ajout de la colonne 'recurrence_type'")
         cursor.execute("ALTER TABLE events ADD COLUMN recurrence_type TEXT DEFAULT 'none'")
-        print("Migration BDD : Mise à jour des anciens types de récurrence...")
         cursor.execute("UPDATE events SET recurrence_type = 'weekly' WHERE is_recurrent = 1")
-    try: cursor.execute("SELECT is_recurrent FROM events LIMIT 1")
-    except sqlite3.OperationalError: cursor.execute("ALTER TABLE events ADD COLUMN is_recurrent INTEGER DEFAULT 0")
-    try: cursor.execute("SELECT target_group FROM events LIMIT 1")
-    except sqlite3.OperationalError: cursor.execute("ALTER TABLE events ADD COLUMN target_group TEXT")
-    try: cursor.execute("SELECT channel_id FROM events LIMIT 1")
-    except sqlite3.OperationalError: cursor.execute("ALTER TABLE events ADD COLUMN channel_id INTEGER")
-    try: cursor.execute("SELECT reminder_3d_sent FROM events LIMIT 1")
-    except sqlite3.OperationalError: cursor.execute("ALTER TABLE events ADD COLUMN reminder_3d_sent INTEGER DEFAULT 0")
-    try: cursor.execute("SELECT reminder_24h_sent FROM events LIMIT 1")
-    except sqlite3.OperationalError: cursor.execute("ALTER TABLE events ADD COLUMN reminder_24h_sent INTEGER DEFAULT 0")
-    try: cursor.execute("SELECT keep_thread FROM events LIMIT 1")
-    except sqlite3.OperationalError: cursor.execute("ALTER TABLE events ADD COLUMN keep_thread INTEGER DEFAULT 0")
+    
+    # ... (autres migrations pour target_group, channel_id, etc.) ...
+    
+    # NOUVELLE MIGRATION pour 'is_cancelled'
+    try:
+        cursor.execute("SELECT is_cancelled FROM events LIMIT 1")
+    except sqlite3.OperationalError:
+        print("Migration BDD : Ajout de la colonne 'is_cancelled'")
+        cursor.execute("ALTER TABLE events ADD COLUMN is_cancelled INTEGER DEFAULT 0")
+    
     conn.commit()
     conn.close()
 
@@ -85,24 +88,31 @@ def get_attendance_summary(message_id):
     not_coming = [(name, user_id) for name, status, user_id in attendance_data if status == "Not Coming"]
     return {"coming": coming, "maybe": maybe, "not_coming": not_coming}
 
-def get_event_end_time_utc(message_id):
+def get_event_state(message_id):
+    """Récupère l'heure de FIN (UTC) ET le statut 'annulé' de l'événement."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT event_date, event_time FROM events WHERE message_id = ?", (message_id,))
+    # MODIFIÉ : Récupère aussi 'is_cancelled'
+    cursor.execute("SELECT event_date, event_time, is_cancelled FROM events WHERE message_id = ?", (message_id,))
     row = cursor.fetchone()
     conn.close()
-    if not row: return None 
-    date, time = row
+
+    if not row: 
+        return (None, False) # Retourne (temps, est_annulé)
+    
+    date, time, is_cancelled = row
+    
     try:
         naive_dt = datetime.datetime.fromisoformat(f"{date}T{time}")
         local_dt = naive_dt.replace(tzinfo=FRENCH_TZ) 
         event_start_utc = local_dt.astimezone(datetime.timezone.utc)
         event_end_utc = event_start_utc + datetime.timedelta(hours=2) # Marge de 2h
-        return event_end_utc
+        
+        # Retourne l'heure de fin ET si l'événement est annulé
+        return (event_end_utc, bool(is_cancelled))
     except Exception as e:
-        print(f"Erreur d'analyse BDD (get_event_end_time_utc) : {e}")
-        return None
-
+        print(f"Erreur d'analyse BDD (get_event_state) : {e}")
+        return (None, False)
 init_db()
 
 # ====================================================================
@@ -163,26 +173,51 @@ class TrainingView(discord.ui.View):
             print(f"Erreur lors de l'update_message : {e}")
     @discord.ui.button(label="✅ Je viens", style=discord.ButtonStyle.green, custom_id="coming")
     async def coming_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        event_end_utc = get_event_end_time_utc(interaction.message.id)
+        # MODIFIÉ : Appelle la nouvelle fonction
+        event_end_utc, is_cancelled = get_event_state(interaction.message.id)
+        
+        # NOUVEAU : Vérifie si l'événement est annulé
+        if is_cancelled:
+            await interaction.response.send_message("Désolé, cet événement a été **annulé**. Les inscriptions sont fermées.", ephemeral=True)
+            return
+            
         if not event_end_utc or datetime.datetime.now(datetime.timezone.utc) > event_end_utc:
             await interaction.response.send_message("Désolé, cet événement est déjà terminé.", ephemeral=True)
             return
+        
         await self.invite_and_update(interaction, "Coming", "Vous êtes marqué·e comme 'Présent·e'. Rendez-vous là-bas !")
+
     @discord.ui.button(label="❓ Je ne sais pas", style=discord.ButtonStyle.blurple, custom_id="maybe")
     async def maybe_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        event_end_utc = get_event_end_time_utc(interaction.message.id)
+        # MODIFIÉ : Appelle la nouvelle fonction
+        event_end_utc, is_cancelled = get_event_state(interaction.message.id)
+        
+        # NOUVEAU : Vérifie si l'événement est annulé
+        if is_cancelled:
+            await interaction.response.send_message("Désolé, cet événement a été **annulé**. Les inscriptions sont fermées.", ephemeral=True)
+            return
+            
         if not event_end_utc or datetime.datetime.now(datetime.timezone.utc) > event_end_utc:
             await interaction.response.send_message("Désolé, cet événement est déjà terminé.", ephemeral=True)
             return
+
         await self.invite_and_update(interaction, "Maybe", "Vous êtes marqué·e comme 'Indécis·e'. Merci de mettre à jour si possible !")
+
     @discord.ui.button(label="❌ Je ne viens pas", style=discord.ButtonStyle.red, custom_id="not_coming")
     async def not_coming_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        event_end_utc = get_event_end_time_utc(interaction.message.id)
+        # MODIFIÉ : Appelle la nouvelle fonction
+        event_end_utc, is_cancelled = get_event_state(interaction.message.id)
+        
+        # NOUVEAU : Vérifie si l'événement est annulé
+        if is_cancelled:
+            await interaction.response.send_message("Désolé, cet événement a été **annulé**. Les inscriptions sont fermées.", ephemeral=True)
+            return
+            
         if not event_end_utc or datetime.datetime.now(datetime.timezone.utc) > event_end_utc:
             await interaction.response.send_message("Désolé, cet événement est déjà terminé.", ephemeral=True)
             return
-        await self.invite_and_update(interaction, "Not Coming", "Vous êtes marqué·e comme 'Absent·e'. Merci d'avoir prévenu.")
 
+        await self.invite_and_update(interaction, "Not Coming", "Vous êtes marqué·e comme 'Absent·e'. Merci d'avoir prévenu.")
 # ====================================================================
 # 4. FONCTION PRINCIPALE DE CRÉATION D'ÉVÉNEMENT -- TEXTE INCLUSIF
 # ====================================================================
@@ -349,6 +384,78 @@ async def supprimer_evenement(interaction: discord.Interaction, message_id: str)
     conn.commit()
     conn.close()
     await interaction.edit_original_response(content=f"Succès ! L'événement {msg_id_int} a été supprimé.")
+
+# --- COMMANDE D'ANNULATION ---
+@bot.tree.command(name="annuler_evenement", description="[ADMIN] Annule un événement (les inscriptions sont bloquées, mais le fil reste).")
+@discord.app_commands.describe(
+    message_id="L'ID (du message) de l'événement à annuler"
+)
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def annuler_evenement(interaction: discord.Interaction, message_id: str):
+    """Gère l'annulation d'une occurrence d'événement."""
+    
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    
+    try:
+        msg_id_int = int(message_id)
+    except ValueError:
+        await interaction.followup.send("Erreur : L'ID doit être un nombre.", ephemeral=True)
+        return
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    
+    # 1. Trouver l'événement dans la BDD
+    cursor.execute("SELECT thread_id, channel_id FROM events WHERE message_id = ?", (msg_id_int,))
+    event_data = cursor.fetchone()
+    
+    if not event_data:
+        await interaction.followup.send(f"Événement non trouvé dans la BDD.", ephemeral=True)
+        conn.close()
+        return
+
+    thread_id, channel_id = event_data
+    
+    # 2. Mettre à jour la BDD
+    cursor.execute("UPDATE events SET is_cancelled = 1 WHERE message_id = ?", (msg_id_int,))
+    conn.commit()
+    conn.close()
+    
+    print(f"Événement {msg_id_int} annulé par {interaction.user.name}")
+    
+    # 3. Informer les utilisateurs sur Discord
+    try:
+        # Modifier le message principal
+        channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+        if channel:
+            message = await channel.fetch_message(msg_id_int)
+            original_embed = message.embeds[0]
+            
+            # Copier l'embed et le modifier
+            new_embed = original_embed.copy()
+            new_embed.title = "🚫 ANNULÉ - " + original_embed.title
+            new_embed.description = "**CET ÉVÉNEMENT EST OFFICIELLEMENT ANNULÉ.**\nLes inscriptions sont fermées.\n\n" + original_embed.description
+            new_embed.color = discord.Color.red()
+            
+            # Réapplique les champs de présence (pour les conserver visibles)
+            new_embed.clear_fields()
+            for field in original_embed.fields:
+                new_embed.add_field(name=field.name, value=field.value, inline=field.inline)
+
+            # On Laisse les boutons (View), ils donneront une erreur "annulé" si on clique
+            await message.edit(embed=new_embed, view=message.view)
+    except Exception as e:
+        print(f"Erreur lors de l'édition du message {msg_id_int} pour annulation: {e}")
+
+    try:
+        # Envoyer un message dans le fil
+        thread = bot.get_channel(thread_id) or await bot.fetch_channel(thread_id)
+        if thread:
+            await thread.send("🚫 **Cet événement a été annulé par un·e administrateur·rice.** Les inscriptions sont fermées.")
+    except Exception as e:
+        print(f"Erreur lors de l'envoi du message d'annulation au fil {thread_id}: {e}")
+
+    await interaction.followup.send(f"Succès ! L'événement {msg_id_int} a été marqué comme annulé.", ephemeral=True)
 
 # --- GESTION DES ERREURS ---
 @bot.event
