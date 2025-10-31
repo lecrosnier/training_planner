@@ -1,0 +1,21 @@
+[Unit]
+Description=My Discord Bot Service
+# This line is crucial: it waits until the network is ready to start the bot.
+After=network.target
+
+[Service]
+# IMPORTANT: Change 'pi' to your actual username if it's different.
+User=pi
+
+# IMPORTANT: Change this to your project's main directory.
+WorkingDirectory=/home/pi/training_planner
+
+# IMPORTANT: Change this to the full path of your 'start_bot.sh' launcher script.
+ExecStart=/home/pi/training_planner/start_bot.sh
+
+# Restart the service if it fails
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
