@@ -6,7 +6,7 @@ Ce bot Discord est conçu pour simplifier l'organisation des entraînements de v
 
 ## 📖 Guide Utilisateur (Pour les Membres)
 
-En tant que membre, l'utilisation du bot est très simple :
+En tant que membre, votre interaction est très simple.
 
 ### Répondre à une invitation d'entraînement
 
@@ -26,6 +26,8 @@ Lorsque les organisateur·rice·s publient un nouvel entraînement, vous verrez 
 
 Vous pouvez modifier votre réponse à tout moment en cliquant simplement sur un autre bouton. Le bot mettra à jour votre statut sur le message principal et ajustera votre présence dans le fil de discussion.
 
+Si un événement est marqué comme **"🚫 ANNULÉ"**, les boutons seront bloqués.
+
 ---
 
 ## 🛠️ Guide Administrateur·rice (Utilisation)
@@ -37,7 +39,7 @@ En tant qu'administrateur·rice, vous disposez de commandes pour créer et gére
 La méthode la plus simple est d'utiliser l'assistant en messages privés.
 
 1.  Dans n'importe quel salon, tapez la commande : `/creer_wizard`
-2.  Le bot vous enverra un **message privé**. Répondez aux questions posées :
+2.  Le bot vous enverra un **message privé**. Répondez aux 6 questions posées :
     * **Date** (Format `AAAA-MM-JJ`)
     * **Heure** (Format `HH:MM:SS`, heure de Paris)
     * **Détails** (Lieu, programme, etc.)
@@ -46,25 +48,30 @@ La méthode la plus simple est d'utiliser l'assistant en messages privés.
     * **Groupe Cible** (Optionnel : Mentionnez un ou plusieurs rôles, ex: `@RoleA @RoleB`, ou répondez `aucun`)
 3.  Une fois terminé, le bot confirmera en MP et publiera l'événement dans le **salon où vous avez lancé la commande `/creer_wizard`**.
 
-### Créer un événement via Commande Rapide (Moins d'options)
+### Créer un événement via Commande Rapide
 
 Pour une création rapide (sans récurrence mensuelle), vous pouvez utiliser :
 
 `/creer_entrainement date:AAAA-MM-JJ time:HH:MM:SS details:Vos détails recurrent:True/False target_group:@Role garder_le_fil:True/False`
 
 * `recurrent:True` équivaut à une récurrence **hebdomadaire**. Mettez `False` ou omettez pour un événement unique.
-* Les autres options fonctionnent comme pour l'assistant.
+
+### Annuler un événement (Nouveau)
+
+Cette commande bloque les inscriptions pour un événement (ex: météo) **sans le supprimer**. Le fil de discussion reste actif pour communiquer l'annulation.
+
+1.  **Copiez l'ID du message** de l'événement (activez le Mode Développeur, clic droit > "Copier l'ID du message").
+2.  Lancez la commande : `/annuler_evenement message_id: [ID copié]`
+3.  **Effet :** Le bot ajoutera "🚫 ANNULÉ" au titre de l'embed, bloquera les nouvelles inscriptions, et enverra un message d'annulation dans le fil.
 
 ### Supprimer un événement incorrect
 
 Si un événement a été créé par erreur (par exemple par une mauvaise récurrence passée) :
 
-1.  **Activez le Mode Développeur** dans vos paramètres Discord (`Paramètres Utilisateur` > `Avancés` > `Mode Développeur`).
-2.  Faites un **clic droit** sur le message de l'événement à supprimer.
-3.  Cliquez sur **"Copier l'ID du message"**.
-4.  Lancez la commande (seul·e·s les admins peuvent) :
+1.  **Copiez l'ID du message** de l'événement.
+2.  Lancez la commande (seul·e·s les admins peuvent) :
     `/supprimer_evenement message_id: [ID que vous avez copié]`
-5.  Le bot supprimera le message, le fil associé, et l'entrée dans la base de données (annulant sa récurrence et ses rappels).
+3.  **Effet :** Le bot supprimera le message, le fil associé, et l'entrée dans la base de données (annulant sa récurrence et ses rappels).
 
 ---
 
@@ -80,12 +87,11 @@ Suivez ces étapes pour héberger et lancer le bot vous-même.
 ### 2. Création du Bot sur le Portail Développeur Discord
 
 1.  Allez sur <https://discord.com/developers/applications>.
-2.  Cliquez sur **"New Application"** et donnez un nom (ex: "Bot Club Sportif").
+2.  Cliquez sur **"New Application"** et donnez un nom.
 3.  Allez dans l'onglet **"Bot"**.
 4.  **Important :** Activez les **"Privileged Gateway Intents"** :
     * ✅ **SERVER MEMBERS INTENT**
     * ✅ **MESSAGE CONTENT INTENT**
-    * 
 5.  Cliquez sur **"Reset Token"**, confirmez, et **copiez le jeton (token)** affiché. **Ne le partagez jamais !**
 
 ### 3. Invitation du Bot sur votre Serveur
@@ -105,12 +111,9 @@ Suivez ces étapes pour héberger et lancer le bot vous-même.
 
 ### 4. Préparation des Fichiers et Installation des Librairies
 
-1.  **Créez un dossier** pour votre bot (ex: `bot-entrainement`).
+1.  **Créez un dossier** pour votre bot.
 2.  **Téléchargez le code** (`bot.py`) et placez-le dans ce dossier.
-3.  **Ouvrez un terminal** (Invite de commandes, PowerShell, Terminal...) et naviguez jusqu'à ce dossier avec la commande `cd`.
-    ```bash
-    cd chemin/vers/votre/dossier/bot-entrainement
-    ```
+3.  **Ouvrez un terminal** (Invite de commandes, PowerShell, Terminal...) et naviguez jusqu'à ce dossier (`cd chemin/vers/le/dossier`).
 4.  **Installez les librairies Python requises** :
     ```bash
     pip install discord.py python-dateutil
@@ -139,17 +142,17 @@ Suivez ces étapes pour héberger et lancer le bot vous-même.
 
 Le bot est maintenant en ligne !
 
-**Note :** Le bot s'arrêtera si vous fermez le terminal. Pour un fonctionnement continu (24/7), vous devez l'héberger sur un serveur ou un service d'hébergement (Heroku, Replit en mode payant, VPS...) ou utiliser un gestionnaire de processus comme `screen` (Linux/Mac) ou `pm2`.
+**Note :** Le bot s'arrêtera si vous fermez le terminal. Pour un fonctionnement continu (24/7), vous devez l'héberger sur un serveur ou un service d'hébergement.
 
 ---
 
 ## ⚙️ Fonctionnement Automatique du Bot
 
 * **Rappel J-3 :** Si un `target_group` est défini, un rappel est envoyé dans le salon 3 jours avant l'événement.
-* **Rappel H-24 :** Un rappel est envoyé dans le *fil de discussion* 24 heures avant l'événement, mentionnant les participant·e·s (`✅ Je viens`) et les indécis·e·s (`❓ Je ne sais pas`). L'embed indique le temps restant.
+* **Rappel H-24 :** Un rappel est envoyé dans le *fil de discussion* 24 heures avant l'événement, mentionnant les participant·e·s et les indécis·e·s.
 * **Nettoyage (Cleanup) :** 24 heures *après* l'heure de début de l'événement :
     * Le bot publie un rapport final dans le fil de discussion.
     * **Si `garder_le_fil` est `False` (défaut) :** Le fil est supprimé et le message principal aussi. Si l'événement est récurrent, le bot purge d'abord ses anciens messages du salon avant de créer le suivant.
-    * **Si `garder_le_fil` est `True` :** Le fil est juste archivé, et le message principal est modifié pour désactiver les boutons. La purge n'a pas lieu.
+    * **Si `garder_le_fil` est `True` :** Le fil est juste archivé, et le message principal est modifié (l'embed est mis à jour en "Rapport final") pour désactiver les boutons.
     * L'événement est supprimé de la base de données.
-* **Récurrence :** Si l'événement est récurrent (`Hebdomadaire` ou `Mensuelle`), le bot crée et publie le nouvel événement juste après le nettoyage (ou juste après la purge si `garder_le_fil` est `False`).
+* **Récurrence :** Si l'événement est récurrent (`Hebdomadaire` ou `Mensuelle`), le bot crée et publie le nouvel événement juste après le nettoyage.
